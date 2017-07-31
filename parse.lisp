@@ -5,6 +5,10 @@
 
 (defparameter *tags*  (make-hash-table :test 'equal))
 (defparameter *names* (make-hash-table :test 'equal))
+(defun resolve (identifier)
+  (gethash identifier (if (string= "VTG_" identifier :end2 4)
+		    *tags*
+		    *names*)))
 
 (defun parse-read-json (file)
   (let ((*read-default-float-format* 'double-float))
@@ -40,18 +44,22 @@
 (defstruct varray    type size)
 (defstruct bitfield  type width)
 
+
 ;;
 ;; Parse a form for a tagname or id if there is no name
+
 (defun parse-tagname-or-id (form)
   (let ((name (aval :name form)))
     (if (zerop (length name))
 	(format nil "VTG_~A" (aval :id form))
-	name)))
+	(format nil "VTG_~A" name))))
 ;;
 ;; for tags only, from struct,enum,union
 (defun type-from-tagname-or-id (form)
   "Return type of item; if anonymous, a numeric id"
-  (gethash (parse-tagname-or-id form) *tags*))
+					;(gethash (parse-tagname-or-id form) *tags*)
+  (parse-tagname-or-id form))
+ 
 
 (defun set-named-item (item key hashtable from )
   "add an item to the specified hashtable by key"
@@ -119,9 +127,10 @@
       (":array" (parse-type-array form))
       (":bitfield" (parse-type-bitfield form))
       (":function" :pointer)
-      ("struct" (parse-struct form))
-      ("union" (parse-union form))      
-      (t (or (gethash formtag *names*)
+      ("struct" (vstruct-name (parse-struct form)))
+      ("union" (vunion-name (parse-union form)))      
+      (t (or (and (gethash formtag *names*)
+		  formtag) ;;just a name
 	     (error "No handler for ~A" form))))))
 
 

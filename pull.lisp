@@ -1,87 +1,70 @@
 (in-package :wtf)
 ;; accounting for items in project
 
-(defparameter *included* (make-hash-table :test 'equal))
+(defparameter *pulled* (make-hash-table :test 'equal))
+(defparameter *pullseq* nil)
 
-(defun show (hashtable &optional key)
-  (if key
-      (format t "~A~%" (gethash key hashtable))
-      (maphash (lambda (key value)
-		 (format t "~A . ~A~%"key value))
-	       hashtable)))
+(defun pull ()
+  (clrhash *pulled*)
+  (setf *pullseq* nil)
+  (mapc #'pull-one *selected*)
+  (hash-table-count *pulled*))
 
-(defun include (name)
-  "include a name and its dependencies..."
+(defun pull-one (name)
+  "pull a name and its dependencies..."
   (let ((item (gethash name *names*)))
     (unless item (error "Name ~A not found" name))
-    (include-  item :fiat))
-  *included* 
+    (pull-  item :fiat))
   )
 
-(defun include-resolve-tag (tagname)
-  "resolve t")
 
-(defun include-prim (item by &key (key (slot-value item 'name) ))
-  (setf (gethash key *included*) by)
+(defun pull-prim (item by &key (key (slot-value item 'name) ))
+  (let ((value (gethash key *pulled*)))
+    (unless value (push key *pullseq*))
+    (setf (gethash key *pulled*)
+	  (cons by value)))
+
   key)
+;; types are often represented by a string name...
+;; just keep it going
+(defmethod pull- ((item string) by)
+  (pull- (resolve item) by))
+;; generally, pull routines pull in dependencies and
+;; themselves only after.. This macro simplifies that...
+;; Actually because of hashtables, sequence does not matter...
+(defmacro pull-deps (item by &body body)
+  `(let ((myname (slot-value ,item 'name)))
+     ,@body
+     (pull-prim ,item ,by)))
 
-
-(defmethod include- ((item vstruct) by)
-  (let ((includer (include-prim item by)))
+(defmethod pull- ((item vstruct) by)
+  (pull-deps item by
     (loop for field in (vstruct-fields item)
-       do (include- (field-type field) includer))))
+       do (pull- (field-type field) myname))))
 
-(defmethod include- ((item vunion) by)
-  (let ((includer  (include-prim item by)))
+(defmethod pull- ((item vunion) by)
+  (pull-deps item by
     (loop for field in (vunion-fields item)
-       do (include- (field-type field) includer))))
+       do (pull- (field-type field) myname))))
 
-
-
-(defmethod include- ((item vfunction) by)
-  (let ((includer (include-prim item by)))
+(defmethod pull- ((item vfunction) by)
+  (pull-deps item by
     (loop for parameter in (vfunction-parameters item)
-       do (include- (parameter-type parameter) includer))
-    (include- (vfunction-rtype item) includer)))
+       do (pull- (parameter-type parameter) myname))
+    (pull- (vfunction-rtype item) myname)))
 
-(defmethod include- ((item vtypedef) by)
-  (let ((includer (include-prim item by)))
-    (include- (vtypedef-type item) includer)))
+(defmethod pull- ((item vtypedef) by)
+  (pull-deps item by
+    (pull- (vtypedef-type item) myname)))
 
-(defmethod include- ((item pointer) by)
-  (include- (pointer-type item) by))
+(defmethod pull- ((item pointer) by)
+  (pull- (pointer-type item) by))
 
-(defmethod include- ((item varray) by)
-  (include- (varray-type item) by))
+(defmethod pull- ((item varray) by)
+  (pull- (varray-type item) by))
 
-(defmethod include- ((item vbase) by)
+(defmethod pull- ((item vbase) by)
   )
-(defmethod include- ((item venum) by)
-  (include-prim item by)
+(defmethod pull- ((item venum) by)
+  (pull-prim item by)
 )
-
-
-(defun tt ()
-  (let ((exclude-sources '("/usr"))
-	(include-sources '("vc_dispmanx"))
-	(exclude-definitions '("^vc" "^_vc" "^pthread_" "single_get_func_table"))
-	(include-definitions '("^vc_dispmanx")))
-    (ttt exclude-definitions exclude-sources
-	 include-definitions include-sources)))
-
-
-(defun select-auto (+files -files +names -names )
-  (let ((items (hash-table-values *names*)))
-    (loop for item in items
-       as location = (slot-value item 'location)
-       as name = (slot-value item 'name)
-       unless (or (not (vfunction-p item))
-		  (and  (or (included-p name -names)
-			    (and (included-p location -files)
-				 (not (included-p name +names))))
-			(not (or (included-p name +names)
-				 (and (included-p location +files)
-				      (not (included-p name -names)))))))
-      
-       collect name
-	 )))
