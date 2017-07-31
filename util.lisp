@@ -158,3 +158,30 @@ object is specified by OBJECT-INITARG being non-NIL."
 	     (write-line expression hout))
 	(file-position hout (1- (file-position hout))); undo final ,
 	(princ "]" hout)))))
+
+
+
+
+;;===
+(defun split-seq (seq separators &key (test #'char=) (default-value '("")))
+  "split a sequence into sub sequences given the list of seperators."
+  (let ((seps separators))
+    (labels ((sep (c)
+               (find c seps :test test)))
+      (or (loop for i = (position-if (complement #'sep) seq)
+                then (position-if (complement #'sep) seq :start j)
+                as j = (position-if #'sep seq :start (or i 0))
+                while i
+                collect (subseq seq i j)
+                while j)
+          ;; the empty seq causes the above to return NIL, so help
+          ;; it out a little.
+          default-value))))
+
+
+(defun show (hashtable &optional key)
+  (if key
+      (format t "~A~%" (gethash key hashtable))
+      (maphash (lambda (key value)
+		 (format t "~A . ~A~%"key value))
+	       hashtable)))

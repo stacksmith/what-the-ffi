@@ -11,7 +11,7 @@
 	       hashtable)))
 
 (defun include (name)
-  "include a name"
+  "include a name and its dependencies..."
   (let ((item (gethash name *names*)))
     (unless item (error "Name ~A not found" name))
     (include-  item :fiat))
@@ -60,21 +60,7 @@
   (include-prim item by)
 )
 
-;;===============================
-(defstruct project
-  include-sources include-definitions
-  exclude-sources exclude-definitions)
 
-(defparameter *include-sources* nil)
-(defparameter *exclude-sources* nil)
-(defparameter *include-definitions* nil)
-(defparameter *exclude-definitions* nil)
-#||
-((exclude-sources '("usr" "vmcs_host" "vc_cec"  "vhci" "vc_dispservice_x_defs"))
-	(include-sources '("stdint" "vc_dispmanx"  "vc_image_types" "vc_display_types"))
-	(exclude-definitions '("^_" "DISPMANX_DISPLAY_FUNCS_T" "vc_vchi_"))
-	(include-definitions '("VCHI_MEM_HANDLE_T" "__eglMustCastToProperFunctionPointerType")))
-||#
 (defun tt ()
   (let ((exclude-sources '("/usr"))
 	(include-sources '("vc_dispmanx"))
@@ -84,19 +70,18 @@
 	 include-definitions include-sources)))
 
 
-(defun ttt (exclude-definitions exclude-sources
-	    include-definitions include-sources)
+(defun select-auto (+files -files +names -names )
   (let ((items (hash-table-values *names*)))
     (loop for item in items
        as location = (slot-value item 'location)
        as name = (slot-value item 'name)
        unless (or (not (vfunction-p item))
-		  (and  (or (included-p name exclude-definitions)
-			    (and (included-p location exclude-sources)
-				 (not (included-p name include-definitions))))
-			(not (or (included-p name include-definitions)
-				 (and (included-p location include-sources)
-				      (not (included-p name exclude-definitions)))))))
+		  (and  (or (included-p name -names)
+			    (and (included-p location -files)
+				 (not (included-p name +names))))
+			(not (or (included-p name +names)
+				 (and (included-p location +files)
+				      (not (included-p name -names)))))))
       
        collect name
 	 )))

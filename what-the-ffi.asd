@@ -9,9 +9,9 @@
   :components ((:file "package")
 	       (:file "util")
 	       (:file "parse")
-	       (:file "reason")
-	       
-	       (:file "library")
+	       (:file "select")
+	       (:file "project")
+;;	       (:file "library")
 ;;               (:file "test")
 	       ))
 
