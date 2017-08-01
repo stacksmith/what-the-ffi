@@ -185,3 +185,6 @@ object is specified by OBJECT-INITARG being non-NIL."
       (maphash (lambda (key value)
 		 (format t "~A . ~A~%"key value))
 	       hashtable)))
+
+(defun keys (hashtable) (hash-table-keys hashtable)
+(defun vals (hashtable) (hash-table-values hashtable)))

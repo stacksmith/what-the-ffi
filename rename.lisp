@@ -5,3 +5,4 @@
 	 (if (ppcre:all-matches "^(:_|_)" string)
 	     (nstring-upcase string)
 	     (nstring-upcase (nsubstitute #\- #\_ string))))))
+

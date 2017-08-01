@@ -46,10 +46,12 @@
    :sexpfile "~/local/test/egl/spec.sexp"
    ;; selection
    :-files  '("/usr")
-   :+files '()
+   :+files '("dispmanx")
    :-names  '(".*")
    :+names '("vc_dispmanx" )
    ;; pull dependencies
+
+   ;; rename
    ))
 
 (defun spec ()
@@ -68,4 +70,4 @@
 
 ;; (pull)
 
-(defun)
+
