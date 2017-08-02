@@ -6,3 +6,6 @@
 	     (nstring-upcase string)
 	     (nstring-upcase (nsubstitute #\- #\_ string))))))
 
+
+(defstruct name-rule
+  (function ))

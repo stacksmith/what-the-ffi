@@ -1,14 +1,40 @@
 (in-package :wtf)
 
+
+;;==============================================================================
+;; There are many namespaces (global, tag, and one for each function, struct or
+;; union).  Global names must be unique when read multiple times; local ones are
+;; unique by definition, and are lists to preserve sequence.
+;;
+;; Here namespace is either a global namespace or owner stucture/union/enum.
+(defclass name ()
+  ((c         :accessor c         :initarg :c)
+   (lisp      :accessor lisp                          :initform nil)
+   (location  :accessor location  :initarg :location  :initform nil)
+   (namespace :accessor namespace :initarg :namespace )
+   (by        :accessor by        :initarg :by        :initform nil)))
+
+;;------------------------------------------------------------------------------
+(defmethod print-object ((obj name) out)
+  (print-unreadable-object (obj out :type t)
+    (format out "~s" (c obj))))
+
+;;------------------------------------------------------------------------------
+(defmethod initialize-instance :after ((name name) &key)
+  (with-slots (namespace c) name
+    (when (eq (type-of namespace) 'hash-table)
+      (setf  (gethash c namespace) name))))
+
+;;==============================================================================
 (defparameter *sexps* nil)
 
-
+;; global namespaces...
 (defparameter *tags*  (make-hash-table :test 'equal))
 (defparameter *names* (make-hash-table :test 'equal))
-(defun resolve (identifier)
-  (gethash identifier (if (string= "VTG_" identifier :end2 4)
-		    *tags*
-		    *names*)))
+(defun resolve (c)
+  (gethash c (if (string= "VTG_" c :end2 4)
+		 *tags*
+		 *names*)))
 
 (defun parse-read-json (file)
   (let ((*read-default-float-format* 'double-float))
@@ -28,26 +54,320 @@
   (with-open-file (in sexpfname)
     (setf *sexps* (read in))
     (length *sexps*)))
-
+(defparameter *print-full* t)
 ;; Top-level types are described with these structures.
-(defstruct vstruct   name location  fields width align)
-(defstruct vunion    name location  fields width align)
-(defstruct venum     name location  fields )
-(defstruct vfunction name location parameters rtype variadic storage inline )
-(defstruct vtypedef  name location type)
-(defstruct vbase     name location value)
-;; inside, fields are described as follows:
-(defstruct field     name offset width align type)
-(defstruct efield    name value)
-(defstruct parameter name type)
-(defstruct pointer   type)
-(defstruct varray    type size)
-(defstruct bitfield  type width)
+(defmethod c ((obj null))
+  "()")
 
 
+;;==============================================================================
 ;;
-;; Parse a form for a tagname or id if there is no name
+;; struct
+;;
+(defclass vstruct   (name)
+  ((fields  :accessor fields :initform nil)
+   (width   :accessor width  :initform 0    :initarg :width)
+   (align   :accessor align  :initform 0    :initarg :align)))
 
+;;------------------------------------------------------------------------------
+#||
+(defmethod print-object ((obj vstruct) out)
+  (if *print-full*
+      (let ((*print-full* nil))
+	(format out "struct ~a~a"  (c obj) (fields obj)))
+      (format out "struct ~a;" (c obj) )))
+||#
+;;------------------------------------------------------------------------------
+(defun parse-struct (form)
+  (let ((item
+	 (make-instance 'vstruct
+			:c (parse-tagname-or-id form)
+			:namespace *tags*
+			:location (aval :location form)
+			:width (aval :bit-size form)
+			:align (aval :bit-alignment form))))
+    (setf (fields item)
+	  (mapcar (lambda (field)
+		    (parse-field field item))
+		  (aval :fields form)))
+    item))
+
+;;==============================================================================
+;;
+;; union
+;;
+(defclass vunion   (name)
+  ((fields  :accessor fields :initform nil)
+   (width   :accessor width  :initform 0    :initarg :width)
+   (align   :accessor align  :initform 0    :initarg :align)))
+
+;;------------------------------------------------------------------------------
+(defun parse-union (form)
+  (let ((item
+	 (make-instance 'vunion
+			:c (parse-tagname-or-id form)
+			:namespace *tags*
+			:location (aval :location form)
+			:width (aval :bit-size form)
+			:align (aval :bit-alignment form))))
+    (setf (fields item)
+	  (mapcar (lambda (field)
+		    (parse-field field item))
+		  (aval :fields form)))
+    item))
+;;------------------------------------------------------------------------------
+#||
+(defmethod print-object ((obj vstruct) out)
+  (if *print-full*
+      (let ((*print-full* nil))
+	(format out "union ~a~a;"  (c obj) (fields obj)))
+      (format out "union ~a;" (c obj) )))
+||#
+;;==============================================================================
+;;
+;; enum
+;;
+(defclass venum   (name)
+  ((fields  :accessor fields :initform nil)
+   (width   :accessor width  :initform 0    :initarg :width)
+   (align   :accessor align  :initform 0    :initarg :align)))
+
+;;------------------------------------------------------------------------------
+#||
+(defmethod print-object ((obj venum) out)
+  (if *print-full*
+      (let ((*print-full* nil))
+	(format out "venum ~A ~:A;"   (c obj) (fields obj)))
+      (format out "venum ~A;"   (c obj) ))  )
+||#
+  ;;------------------------------------------------------------------------------
+
+(defun parse-enum (form )
+  (let ((result
+	 (make-instance 'venum
+			:c (parse-tagname-or-id form)
+			:namespace *tags*
+			:location (aval :location form))))
+    (setf (fields result)
+	  (mapcar (lambda (efield)
+		    (parse-efield efield result))
+		  (aval :fields form)))
+    result))
+
+;;==============================================================================
+;;
+;; efield (enum only)
+;;
+
+(defclass efield  (name)
+  ((value      :accessor value      :initarg :value)))
+
+;;------------------------------------------------------------------------------
+#||
+(defmethod print-object ((obj efield) out)
+  (format out "~s ~a, "  (c obj) (value obj) ))
+||#
+;;------------------------------------------------------------------------------
+(defun parse-efield (form owner)
+  (make-instance 'efield
+		 :c (aval :name form)
+		 :namespace owner
+		 :value (aval :value form)))
+
+;;==============================================================================
+;;
+;; function
+;;
+(defclass vfunction  (name)
+  ((parameters :accessor parameters :initform nil)
+   (rtype      :accessor rtype      :initarg :rtype)
+   (variadic   :accessor variadic   :initform nil  :initarg :variadic)
+   (storage    :accessor storage    :initform nil  :initarg :storage)
+   (vinline     :accessor vinline     :initform nil  :initarg :inline)))
+
+;;------------------------------------------------------------------------------
+#||
+(defmethod print-object ((obj vfunction) out)
+  (print-unreadable-object (obj out :type t)
+    (format out "LEVEL ~A" *print-level*))
+;  (let ((*print-full* nil))    (format out "~A ~A~:A"  (rtype obj) (c obj) (parameters obj)))
+  )
+
+||#
+;;------------------------------------------------------------------------------
+(defun parse-function (form)
+  (let ((item (make-instance 'vfunction
+			     :c (aval :name form)
+			     :namespace *names*
+			     :location (aval :location form)
+			     :variadic (aval :variadic form)
+			     :storage  (aval :storage--class form)
+			     :inline   (aval :inline form)
+			     :rtype (parse-type (aval :return-type form)))))
+    (setf (parameters item)
+	  (mapcar (lambda (parameter)
+		    (parse-parameter parameter item))
+		  (aval :parameters form)))
+    item))
+
+;;==============================================================================
+;;
+;; parameter
+;;
+(defclass vparameter  (name)
+  ((vtype       :accessor vtype       :initarg :vtype)))
+
+;;------------------------------------------------------------------------------
+#||
+(defmethod print-object ((obj vparameter) out)
+  (format out "~s ~a, "  (vtype obj) (c obj)))
+||#
+;;------------------------------------------------------------------------------
+(defun parse-parameter (form owner)
+  (make-instance 'vparameter
+		 :c (aval :name form)
+		 :namespace owner
+		 :vtype (parse-type (aval :type form))))
+
+;;==============================================================================
+;;
+;; typedef
+;; 
+(defclass vtypedef  (name)
+  ((vtype       :accessor vtype       :initarg :vtype)))
+
+;;------------------------------------------------------------------------------
+
+#||
+(defmethod print-object ((obj vtypedef) out)
+  (print-unreadable-object (obj out :type t)
+    (format t "print-level ~A" *print-level*))
+  (if *print-full*
+      (let ((*print-full* nil))
+	(format out "typedef ~a ~a" (c obj)  (vtype obj)))
+      (format out "~A"(c (vtype obj)))
+      )
+)
+||#
+
+
+;;------------------------------------------------------------------------------
+(defun parse-typedef (form )
+  (make-instance 'vtypedef
+		 :c     (aval :name form)
+		 :namespace *names*
+		 :location (aval :location form)
+		 :vtype (parse-type (aval :type form))))
+
+;;==============================================================================
+;;
+;; base (built-in cffi classes)
+;;
+(defclass vbase  (name)
+  ((value      :accessor value      :initarg :value)))
+
+;;------------------------------------------------------------------------------
+#||
+(defmethod print-object ((obj vbase) out)
+  (if *print-full*
+      (format out "<~s>"  (value obj))
+      (format out "~s" (value obj))))
+||#
+;;==============================================================================
+;;
+;; field (union or struct
+;;
+(defclass field  (name)
+  ((offset  :accessor offset :initarg :offset)
+   (width   :accessor width  :initarg :width)
+   (align   :accessor align  :initarg :align)
+   (vtype       :accessor vtype       :initarg :vtype)))
+
+;;------------------------------------------------------------------------------
+#|(defmethod print-object ((obj field) out)
+  (if *print-full*
+      (format out "<~a ~a>" (vtype obj) (c obj))
+      (format out "<~a ~a>" (c  (vtype obj)) (c obj))))
+|#
+;;------------------------------------------------------------------------------
+(defun parse-field (form owner)
+  (make-instance 'field
+		 :c (aval :name form)
+		 :namespace owner
+		 :offset (aval :bit-offset form)
+		 :width (aval :bit-size form)
+		 :align (aval :bit-alignment form )
+		 :vtype (parse-type (aval :type form))
+		 ))
+
+;;==============================================================================
+;;
+;; pointer  (anon, type-parser)
+;;
+(defclass vpointer  ()
+  ((vtype       :accessor vtype       :initarg :vtype)))
+
+;;------------------------------------------------------------------------------
+#|#
+(defmethod print-object ((obj vpointer) out)
+  (format out "~a*"  (vtype obj)))
+||#
+;;------------------------------------------------------------------------------
+(defmethod c ((obj vpointer))
+  ":pointer")
+
+;;==============================================================================
+;;
+;; array
+;;
+(defclass varray  ()
+  ((vtype       :accessor vtype       :initarg :vtype)
+   (size        :accessor size        :initarg :size)))
+
+;;------------------------------------------------------------------------------
+(defmethod c ((obj varray))
+  "varray")
+
+;;------------------------------------------------------------------------------
+(defun parse-type-array (form)
+  (make-instance 'varray
+		 :vtype (parse-type (aval :type form))
+		 :size (aval :size form)))
+
+;;==============================================================================
+;;
+;; bitfield
+;;
+(defclass bitfield  ()
+  ((vtype       :accessor vtype       :initarg :vtype)
+   (width   :accessor width  :initarg :width)))
+
+;;------------------------------------------------------------------------------
+(defmethod c ((obj bitfield))
+  "bitfield")
+
+;;------------------------------------------------------------------------------
+(defun parse-type-bitfield (form)
+  (make-instance 'bitfield
+		 :vtype (parse-type (aval :type form))
+		 :width (aval :width form)))
+
+;;==============================================================================
+;;
+;; extern
+;;
+(defun parse-extern (form)
+  (format t "Not implemented: EXTERN ~A~%~A~%"
+	  (aval :name form)
+	  (aval :location form)))
+;;
+
+;;==============================================================================
+;;==============================================================================
+;;==============================================================================
+;;==============================================================================
+;; Parse a form for a tagname or id if there is no name, in tag space
+;;
 (defun parse-tagname-or-id (form)
   (let ((name (aval :name form)))
     (if (zerop (length name))
@@ -58,14 +378,8 @@
 (defun type-from-tagname-or-id (form)
   "Return type of item; if anonymous, a numeric id"
 					;(gethash (parse-tagname-or-id form) *tags*)
-  (parse-tagname-or-id form))
+  (gethash (parse-tagname-or-id form) *tags*))
  
-
-(defun set-named-item (item key hashtable from )
-  "add an item to the specified hashtable by key"
-  (declare (ignore from))
-  (setf (gethash key hashtable) item)
-  )
 
 (defun init ()
   "Wipe symbol tables, and create base types"
@@ -90,9 +404,9 @@
 	 (":function-pointer" . :pointer)
 	 (":long-double" :long-double)
 	 ("__builtin_va_list" :pointer)
+;;
 	 )
-     do (setf (gethash key *names*)
-	      (make-vbase  :name key :value value))))
+     do (make-instance 'vbase  :c key :namespace *names* :value value )))
 
 
 (defun parse ()
@@ -103,6 +417,25 @@
        ;;(print i)
        (parse-top form))
   (values (hash-table-count *names*) (hash-table-count *tags*)))
+
+(defun parse-type (form)
+  "Porcess :TYPE sexps"
+  (let ((formtag (aval :tag form)))
+    (switch (formtag :test 'equal)
+      (":enum" (type-from-tagname-or-id form))
+      (":pointer" (make-instance 'vpointer :vtype (parse-type (aval :type form))))
+      (":struct" (type-from-tagname-or-id form))
+      (":union" (type-from-tagname-or-id form))
+      (":array" (parse-type-array form))
+      (":bitfield" (parse-type-bitfield form))
+      (":function" (gethash ":function-pointer" *names*));; should be :pointer in *tags*?
+      ("struct"  (parse-struct form))
+      ("union"  (parse-union form))      
+;;
+      (t (or (gethash formtag *names*)
+	     ;;formtag ;;just a name
+	     (error "No type handler for ~A" form))))))
+
 
 (defun parse-top (form)
   "Process toplevel sexps"
@@ -116,147 +449,5 @@
     ("unhandled" (format t "UNHANDLED by c2ffi: ~A~%" form))
     (t (error "No top handler for ~A" form))))
 
-(defun parse-type (form)
-  "Porcess :TYPE sexps"
-  (let ((formtag (aval :tag form)))
-    (switch (formtag :test 'equal)
-      (":enum" (type-from-tagname-or-id form))
-      (":pointer" (make-pointer :type (parse-type (aval :type form))))
-      (":struct" (type-from-tagname-or-id form))
-      (":union" (type-from-tagname-or-id form))
-      (":array" (parse-type-array form))
-      (":bitfield" (parse-type-bitfield form))
-      (":function" :pointer)
-      ("struct" (vstruct-name (parse-struct form)))
-      ("union" (vunion-name (parse-union form)))      
-      (t (or (and (gethash formtag *names*)
-		  formtag) ;;just a name
-	     (error "No handler for ~A" form))))))
-
-
-;;==============================================================================
-;;(:TYPE (:TAG . ":enum") (:NAME . "") (:ID . 1))
-;; type should exist...
-(defun parse-type-array (form)
-  (make-varray :type (parse-type (aval :type form))
-	       :size (aval :size form)))
-
-(defun parse-type-bitfield (form)
-  (make-bitfield
-   :type (parse-type (aval :type form))
-   :width (aval :width form)))
-
 ;;----------------------------------------------------------------
-;; typedef  (defstruct typedef name location type)
-;;
-(defun parse-typedef (form )
-  (let* ((name (aval :name form))
-	 (item
-	  (make-vtypedef
-	   :name     name
-	   :location (aval :location form)
-	   :type (parse-type (aval :type form)))))
-    (set-named-item item name  *names* "parse-typedef")))
-;;----------------------------------------------------------------
-;; enum    (defstruct venum   tag location  fields )
-;;
 
-(defun parse-enum (form )
-  (let* ((designator (parse-tagname-or-id form))
-	 (fields (aval :fields form)))
-    (let ((item
-	   (make-venum
-	    :name designator
-	    :location (aval :location form)
-	    :fields (mapcar #'parse-efield fields))))
-      (set-named-item item designator *tags* "parse-enum")
-
-      )))
-;;----------------------------------------------------------------
-;; efield   (defstruct efield name value);
-(defun parse-efield (form)
-  (make-efield
-   :name (aval :name form)
-   :value (aval :value form)))
-
-
-
-;;==============================================================================
-;; struct    (defstruct vstruct tag location  fields width align)
-(defun parse-struct (form)
-  (let* ((designator (parse-tagname-or-id form))
-	 (item
-	    (make-vstruct
-	     :name designator
-	     :location (aval :location form)
-	     :width (aval :bit-size form)
-	     :align (aval :bit-alignment form)
-	     :fields (mapcar #'parse-field (aval :fields form)))))
-    (set-named-item item designator *tags* "parse-structs"))
-  )
-
-(defun parse-field (form)
-  (make-field
-   :name (aval :name form)
-   :offset (aval :bit-offset form)
-   :width (aval :bit-size form)
-   :align (aval :bit-alignment form )
-   :type (parse-type (aval :type form))
-))
-
-;;==============================================================================
-;; union    (defstruct vunion  tag location  fields width align)
-(defun parse-union (form)
-  (let* ((designator (parse-tagname-or-id form))
-	 (item
-	    (make-vunion
-	     :name designator
-	     :location (aval :location form)
-	     :width (aval :bit-size form)
-	     :align (aval :bit-alignment form)
-	     :fields (mapcar #'parse-field (aval :fields form)))))
-    (set-named-item item designator *tags* "parse-union"))
-  )
-;;==============================================================================
-;;   (defstruct vfunction name location parameter rtype variadic storage inline )
-(defun parse-function (form)
-  (let* ((designator (aval :name form))
-	 (item
-	  (make-vfunction
-	   :name designator
-	   :location (aval :location form)
-	   :variadic (aval :variadic form)
-	   :storage  (aval :storage--class form)
-	   :inline   (aval :inline form)
-	   :parameters (mapcar #'parse-parameter (aval :parameters form))
-	   :rtype (parse-type (aval :return-type form)))))
-    (set-named-item item designator *names* "parse-function"))
-  )
-
-(defun parse-parameter (form)
-  (make-parameter
-   :name (aval :name form)
-   :type (parse-type (aval :type form)))
-  )
-
-
-(defun parse-extern (form)
-  (format t "Not implemented: EXTERN ~A~%~A~%"
-	  (aval :name form)
-	  (aval :location form)))
-;;(defstruct field name offset width align type)
-(defun ? (name)
-  (gethash name *names*))
-
-;;=====================================
-;; Handle source file storage efficiently:
-;; Keep a hashtable of names;
-;; Encode a location as a filename, line and column.
-(defstruct srcloc path line column)
-
-(defun parse-location (locstr)
-  (let ((parts (split-seq locstr ":")))
-    (make-srcloc
-     :path (first parts)
-     :line (parse-integer (second parts))
-     :column (parse-integer (third parts)))))

@@ -5,15 +5,18 @@
   (generate- (resolve identifier)))
 
 (defmethod generate- ((item vbase))
-  (print (vbase-value item)))
+  (print (value item)))
 
 (defmethod generate- ((item vtypedef))
   (generate- (resolve (vtypedef-type item)))
   )
 
 (defmethod generate- ((item vfunction))
-  (with-slots (name location parameters rtype variadic storage inline) item
-    (format t "(defcfun (\"~A\" ~A) ~A~%" name name  (resolve rtype))
+  (with-slots (c location parameters rtype variadic storage inline) item
+    (format t "~%(defcfun (\"~A\" ~A) ~A" c c  (c rtype))
+    (loop for parameter in parameters do
+	 (with-slots (c vtype) parameter
+	   (format t "~%  (~A ~A)" c (c vtype))))
     (format t ")~%"))
   )
 

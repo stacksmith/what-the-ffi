@@ -9,7 +9,7 @@
   :components ((:file "package")
 	       (:file "util")
 	       (:file "parse")
-	       (:file "select")
+	;;       (:file "select")
 	       (:file "project")
 ;;	       (:file "library")
 ;;               (:file "test")
