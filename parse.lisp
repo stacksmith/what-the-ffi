@@ -12,7 +12,8 @@
    (lisp      :accessor lisp                          :initform nil)
    (location  :accessor location  :initarg :location  :initform nil)
    (namespace :accessor namespace :initarg :namespace )
-   (by        :accessor by        :initarg :by        :initform nil)))
+   (needs     :accessor needs     :initform nil))
+  )
 
 ;;------------------------------------------------------------------------------
 (defmethod print-object ((obj name) out)
@@ -21,9 +22,12 @@
 
 ;;------------------------------------------------------------------------------
 (defmethod initialize-instance :after ((name name) &key)
-  (with-slots (namespace c) name
+  (with-slots (namespace c lisp) name
     (when (eq (type-of namespace) 'hash-table)
-      (setf  (gethash c namespace) name))))
+      (setf  (gethash c namespace) name))
+    (setf lisp (default-c-to-lisp c)))
+  
+  )
 
 ;;==============================================================================
 (defparameter *sexps* nil)
@@ -59,6 +63,34 @@
 (defmethod c ((obj null))
   "()")
 
+;;==============================================================================
+;;
+;; field (union or struct
+;;
+(defclass field  (name)
+  ((offset  :accessor offset :initarg :offset)
+   (width   :accessor width  :initarg :width)
+   (align   :accessor align  :initarg :align)
+   (vtype       :accessor vtype       :initarg :vtype)))
+
+;;------------------------------------------------------------------------------
+#|(defmethod print-object ((obj field) out)
+  (if *print-full*
+      (format out "<~a ~a>" (vtype obj) (c obj))
+      (format out "<~a ~a>" (c  (vtype obj)) (c obj))))
+|#
+;;------------------------------------------------------------------------------
+(defun parse-field (form owner)
+  (make-instance 'field
+		 :c (aval :name form)
+		 :namespace owner
+		 :offset (aval :bit-offset form)
+		 :width (aval :bit-size form)
+		 :align (aval :bit-alignment form )
+		 :vtype (parse-type (aval :type form))
+		 ))
+
+
 
 ;;==============================================================================
 ;;
@@ -80,7 +112,7 @@
 ;;------------------------------------------------------------------------------
 (defun parse-struct (form)
   (let ((item
-	 (make-instance 'vstruct
+	 (make-instance 'vstruct 
 			:c (parse-tagname-or-id form)
 			:namespace *tags*
 			:location (aval :location form)
@@ -275,33 +307,6 @@
 ||#
 ;;==============================================================================
 ;;
-;; field (union or struct
-;;
-(defclass field  (name)
-  ((offset  :accessor offset :initarg :offset)
-   (width   :accessor width  :initarg :width)
-   (align   :accessor align  :initarg :align)
-   (vtype       :accessor vtype       :initarg :vtype)))
-
-;;------------------------------------------------------------------------------
-#|(defmethod print-object ((obj field) out)
-  (if *print-full*
-      (format out "<~a ~a>" (vtype obj) (c obj))
-      (format out "<~a ~a>" (c  (vtype obj)) (c obj))))
-|#
-;;------------------------------------------------------------------------------
-(defun parse-field (form owner)
-  (make-instance 'field
-		 :c (aval :name form)
-		 :namespace owner
-		 :offset (aval :bit-offset form)
-		 :width (aval :bit-size form)
-		 :align (aval :bit-alignment form )
-		 :vtype (parse-type (aval :type form))
-		 ))
-
-;;==============================================================================
-;;
 ;; pointer  (anon, type-parser)
 ;;
 (defclass vpointer  ()
@@ -429,8 +434,8 @@
       (":array" (parse-type-array form))
       (":bitfield" (parse-type-bitfield form))
       (":function" (gethash ":function-pointer" *names*));; should be :pointer in *tags*?
-      ("struct"  (parse-struct form))
-      ("union"  (parse-union form))      
+      ("struct"  (parse-struct form));; inline definition
+      ("union"  (parse-union form))  ;; inline definition
 ;;
       (t (or (gethash formtag *names*)
 	     ;;formtag ;;just a name

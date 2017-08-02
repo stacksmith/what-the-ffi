@@ -8,6 +8,7 @@
   :depends-on (#:cffi #:alexandria #:cl-ppcre #:cl-json)
   :components ((:file "package")
 	       (:file "util")
+	       (:file "rename")
 	       (:file "parse")
 	;;       (:file "select")
 	       (:file "project")
