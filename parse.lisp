@@ -35,10 +35,17 @@
 ;; global namespaces...
 (defparameter *tags*  (make-hash-table :test 'equal))
 (defparameter *names* (make-hash-table :test 'equal))
+
 (defun resolve (c)
   (gethash c (if (string= "VTG_" c :end2 4)
 		 *tags*
 		 *names*)))
+;; canonicalize type, removing indirections imposed by pointer or typedef.
+(defun can-type (obj)
+  (typecase obj
+    (vpointer (can-type (vtype obj)))
+;;    (vtypedef (can-type (vtype obj))) ;we want typedefs!!!
+    (t  obj)))
 
 (defun parse-read-json (file)
   (let ((*read-default-float-format* 'double-float))
@@ -118,12 +125,15 @@
 			:location (aval :location form)
 			:width (aval :bit-size form)
 			:align (aval :bit-alignment form))))
-    (setf (fields item)
-	  (mapcar (lambda (field)
-		    (parse-field field item))
-		  (aval :fields form)))
+    (with-slots (fields needs) item
+      (setf fields (mapcar (lambda (field)
+			     (parse-field field item))
+			   (aval :fields form)))
+      (setf needs
+	    (remove-duplicates (mapcar (lambda (element)
+					 (can-type (vtype element)))
+				       fields))))
     item))
-
 ;;==============================================================================
 ;;
 ;; union
@@ -142,11 +152,16 @@
 			:location (aval :location form)
 			:width (aval :bit-size form)
 			:align (aval :bit-alignment form))))
-    (setf (fields item)
-	  (mapcar (lambda (field)
-		    (parse-field field item))
-		  (aval :fields form)))
+    (with-slots (fields needs) item
+      (setf fields  (mapcar (lambda (field)
+			      (parse-field field item))
+			    (aval :fields form))
+	    needs (remove-duplicates
+		   (mapcar (lambda (element)
+			     (can-type (vtype element)))
+			   fields))))
     item))
+
 ;;------------------------------------------------------------------------------
 #||
 (defmethod print-object ((obj vstruct) out)
@@ -168,23 +183,24 @@
 #||
 (defmethod print-object ((obj venum) out)
   (if *print-full*
-      (let ((*print-full* nil))
+g      (let ((*print-full* nil))
 	(format out "venum ~A ~:A;"   (c obj) (fields obj)))
       (format out "venum ~A;"   (c obj) ))  )
 ||#
   ;;------------------------------------------------------------------------------
 
 (defun parse-enum (form )
-  (let ((result
+  (let ((item
 	 (make-instance 'venum
 			:c (parse-tagname-or-id form)
 			:namespace *tags*
 			:location (aval :location form))))
-    (setf (fields result)
-	  (mapcar (lambda (efield)
-		    (parse-efield efield result))
-		  (aval :fields form)))
-    result))
+    (with-slots(fields needs) item
+      (setf fields
+	    (mapcar (lambda (efield)
+		      (parse-efield efield item))
+		    (aval :fields form))))
+    item))
 
 ;;==============================================================================
 ;;
@@ -217,6 +233,8 @@
    (storage    :accessor storage    :initform nil  :initarg :storage)
    (vinline     :accessor vinline     :initform nil  :initarg :inline)))
 
+(defun vfunction-p (obj)
+  (eq 'vfunction (type-of obj)))
 ;;------------------------------------------------------------------------------
 #||
 (defmethod print-object ((obj vfunction) out)
@@ -236,10 +254,15 @@
 			     :storage  (aval :storage--class form)
 			     :inline   (aval :inline form)
 			     :rtype (parse-type (aval :return-type form)))))
-    (setf (parameters item)
-	  (mapcar (lambda (parameter)
-		    (parse-parameter parameter item))
-		  (aval :parameters form)))
+    (with-slots (parameters needs rtype) item
+      (setf parameters (mapcar (lambda (parameter)
+				 (parse-parameter parameter item))
+			       (aval :parameters form))
+	    needs (remove-duplicates
+		   (cons (can-type rtype)
+			 (mapcar (lambda (parameter)
+				   (can-type (vtype parameter)))
+				 parameters)))))
     item))
 
 ;;==============================================================================
@@ -285,11 +308,14 @@
 
 ;;------------------------------------------------------------------------------
 (defun parse-typedef (form )
-  (make-instance 'vtypedef
-		 :c     (aval :name form)
-		 :namespace *names*
-		 :location (aval :location form)
-		 :vtype (parse-type (aval :type form))))
+  (let ((item
+	 (make-instance 'vtypedef
+			:c     (aval :name form)
+			:namespace *names*
+			:location (aval :location form)
+			:vtype (parse-type (aval :type form)))))
+    (setf (needs item) (list (can-type (vtype item))))
+    item))
 
 ;;==============================================================================
 ;;
@@ -321,6 +347,7 @@
 (defmethod c ((obj vpointer))
   ":pointer")
 
+
 ;;==============================================================================
 ;;
 ;; array
@@ -332,7 +359,8 @@
 ;;------------------------------------------------------------------------------
 (defmethod c ((obj varray))
   "varray")
-
+(defmethod needs ((obj varray))
+  (list (can-type (vtype obj))))
 ;;------------------------------------------------------------------------------
 (defun parse-type-array (form)
   (make-instance 'varray
@@ -392,15 +420,15 @@
   (clrhash *names*)
   (loop for (key . value) in
        '((":char" . :char)
-	 (":unsigned-char" . :unsigned-char)
+	 (":unsigned-char" . :uchar)
 	 (":short" . :short)
-	 (":unsigned-short" . :unsigned-short)
+	 (":unsigned-short" . :ushort)
 	 (":int" . :int)
-	 (":unsigned-int" . :unsigned-int)
+	 (":unsigned-int" . :uint)
 	 (":long" . :long)
-	 (":unsigned-long" . :unsigned-long)
+	 (":unsigned-long" . :ulong)
 	 (":long-long" . :long)
-	 (":unsigned-long-long" . :unsigned-long-long)
+	 (":unsigned-long-long" . :ullong)
 	 (":float" . :float)
 	 (":double" . :double)
 	 (":void" . :void)

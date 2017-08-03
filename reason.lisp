@@ -34,3 +34,5 @@
   (let ((fspec (split-seq location ":")))
     (uiop:run-program (format nil "leafpad --jump=~A ~A &" (or (second fspec) 0)(first fspec)
 			      ))))
+
+
