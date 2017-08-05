@@ -1,6 +1,6 @@
 (in-package :wtf)
 
- ;; misc
+
 
 (defun substr* (str start &optional end)
   "Make a shared substring of STR using MAKE-ARRAY :displaced-to"
@@ -179,14 +179,18 @@ object is specified by OBJECT-INITARG being non-NIL."
           default-value))))
 
 
-(defun show (hashtable &optional key)
-  (if key
-      (format t "~A~%" (gethash key hashtable))
-      (maphash (lambda (key value)
-		 (format t "~A . ~A~%"key value))
-	       hashtable)))
+
 
 (defun keys (hashtable)
   (hash-table-keys hashtable))
 (defun vals (hashtable)
   (hash-table-values hashtable))
+
+;; converts a list, hash-table keys, or a string to a list
+(defun listify-parameter (in)
+  (typecase in
+    (list in)
+    (hash-table (hash-table-keys in))
+    (string (list in))
+    (t (error "~A cannot be listified"in )))
+  )
