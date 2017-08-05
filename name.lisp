@@ -1,9 +1,13 @@
 (in-package :wtf)
 ;;(ql:quickload :what-the-ffi)(in-package :wtf)
-
+;;
+;; This could probably be more automated to parse right into slots, but
 ;;==============================================================================
-;; Make c2ffi slots match the spec names
-
+;; Make c2ffi slots match the spec names.  Just a convenience to avoid
+;; declaring classes with same slots over and over.
+;;
+;; Must be done before compilation takes place, as this is a compiler aid.
+;;
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defparameter *c2ffi-slots*  (make-hash-table :test 'equal))
 
@@ -22,9 +26,12 @@
 		(gethash slot *c2ffi-slots*))
 	      c2ffi-slots)))
 
-
-
 ;;==============================================================================
+;; Names are kept separately from objects, to maintain maximum flexibility
+;; in renaming.  Names are also associated with location information containing
+;; the source file references.
+;;
+;; The *names* hashtable maps strings to name objects.
 (defparameter *names* (make-hash-table :test 'equal)) ;string to <name>
 
 (defclass name ()
@@ -34,7 +41,9 @@
 
 
 ;;==============================================================================
-;; parse a name from form, optionally as a tag.  Anon tags use ID as name.
+;; parse a name from form, optionally as a tag.  Anonymous struct etc. are
+;; assigned a VGT_xxx name, where xxx is c2ffi-assigned id number.
+;;
 (defun parse-name (form &optional istag)
   (let ((cname (aval :NAME form)))
     (if istag
@@ -43,8 +52,9 @@
 				 cname))
 	cname)))
 
+;;==============================================================================
 ;; Handle top-level name creation, including forward references.
-;; We know the cname.
+;; When we know the cname in advance (useful for fake vbase type), this works.
 (defun maybe-new-p (cname location &optional objtype)
   "make sure we have a name and object, (values obj oldp)"
   (multiple-value-bind (name exists); get or create name, setting 'exists'
@@ -57,7 +67,9 @@
 			(make-instance objtype :prefname name)))
 	      exists))))
 ;;-------------------------------------------------------------------------------
-;; Top-level name parsing and find or create name and object.
+;; Top-level name parsing and find or create name and object.  This one gets
+;; the name from the form, although requires a hint about whether it's a topname
+;; or a tag.
 (defun maybe-new (form istag &optional objtype)
   "make sure we have a name and object, (values name obj oldp)"
   (maybe-new-p (parse-name form istag)
@@ -67,6 +79,7 @@
 ;;==============================================================================
 ;;==============================================================================
 ;; The generic function allows us to specialize the subform parsers
+;;
 (defgeneric parse-key-form (obj key subform))
 ;;-------------------------------------------------------------------------------
 ;; Normally, we just return the subform for the key, but some
@@ -74,11 +87,11 @@
 (defmethod parse-key-form ((obj t) (key t) subform)
   subform)
 ;;-------------------------------------------------------------------------------
-;; generic type parser
+;; generic type parser, 
 (defmethod parse-key-form ((obj t) (key (eql :type)) form)
   (parse-type form))
 ;;-------------------------------------------------------------------------------
-;;
+;; and function typ parse type from a form
 (defun parse-type (form)
   (let ((str (aval :TAG form)))
     (or (when-let ((sym (find-symbol str))) ; a builtin type, such as "union"
@@ -89,10 +102,10 @@
 	  (obj name))
 	(error "Unable to parse type ~A ~A" form (find-symbol str))
 	)))
-;;
-;; The other key-form parsers are specialized by type. See the types below.
-;;
-;;-------------------------------------------------------------------------------;; The actual key parse dispatcher.
+
+;;-------------------------------------------------------------------------------
+;; The actual key parse dispatcher.  Processes all keys, matching eponymous
+;; slots with values from form.
 (defun parse-named-keys (obj form keys)
   (loop for key in keys do
        (let ((val (aval key form))
@@ -125,7 +138,13 @@
 (defun parse-top (form)
   (parse+ (intern (aval :TAG form)) form ))
 
-
+;;==============================================================================
+;;==============================================================================
+;;==============================================================================
+;; +            +
+;;    CLASSES
+;; +            +
+;;==============================================================================
 ;;==============================================================================
 ;;==============================================================================
 (defc2ffi efield () (name value))
@@ -160,20 +179,23 @@
 ;;==============================================================================
 ;;==============================================================================
 ;;==============================================================================
+;; named classes
+;;
 (defclass cl-named ()
   ((prefname :accessor prefname :initarg :prefname )))
 
 ;;==============================================================================
+;; vbase   a fake class for the bottommost types
+;;
 (defc2ffi vbase (cl-named) (type))
 
 ;; Fake type, we initialize it explicitly...
 (defun new-vbase (cname basetype)
-  (let ((obj (maybe-new-p cname nil 'vbase)))
-    (setf (-type obj) basetype))
-  )
+  (setf (-type (maybe-new-p cname nil 'vbase))
+	basetype))
 
 (defmethod parse+ ((o vbase) form)
-  (:type o))
+  (-type o))
 
 ;;==============================================================================
 ;;
@@ -215,8 +237,8 @@
   (maybe-new form t '|enum|))
 
 (defmethod parse-key-form ((obj |enum|) (key (eql :fields)) form)
-  (mapcar #'parse-efield form)
-)
+  (mapcar #'parse-efield form))
+
 ;;==============================================================================
 ;;
 ;; struct
