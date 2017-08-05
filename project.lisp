@@ -42,8 +42,8 @@
 (defparameter *project*
   (make-project
    ;; intake
-   :specfile "~/local/test/egl/spec"
-   :sexpfile "~/local/test/egl/spec.sexp"
+   :specfile "~/local/what-the-ffi/egl/spec"
+   :sexpfile "~/local/what-the-ffi/egl/spec.sexp"
    ;; selection
    :-files  '("/usr")
    :+files '("dispmanx")
