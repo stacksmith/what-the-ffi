@@ -1,7 +1,30 @@
 (in-package :wtf)
 ;;(ql:quickload :what-the-ffi)(in-package :wtf)
-;;==============================================================================
 
+;;==============================================================================
+;; Make c2ffi slots match the spec names
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defparameter *c2ffi-slots*  (make-hash-table :test 'equal))
+
+  (mapc (lambda (slotname)
+	  (setf (gethash slotname *c2ffi-slots*)
+		`(,slotname :accessor
+			    ,(intern (concatenate
+				      'string "-" (symbol-name slotname)))
+			    :initform nil)))
+	'(name value type fields width bit-offset bit-alignment 
+	  bit-size kind variadic inline storage--class parameters size)))
+;; A defclass that uses the c2ffi slots
+(defmacro defc2ffi (name direct-superclasses  c2ffi-slots)
+  `(defclass ,name ,direct-superclasses
+     ,(mapcar (lambda (slot)
+		(gethash slot *c2ffi-slots*))
+	      c2ffi-slots)))
+
+
+
+;;==============================================================================
 (defparameter *names* (make-hash-table :test 'equal)) ;string to <name>
 
 (defclass name ()
@@ -10,70 +33,52 @@
    (obj :accessor obj :initarg :obj :initform nil)))
 
 
-
-;; parse a name from form, optionally as a tag
+;;==============================================================================
+;; parse a name from form, optionally as a tag.  Anon tags use ID as name.
 (defun parse-name (form &optional istag)
   (let ((cname (aval :NAME form)))
     (if istag
-	(if (zerop (length cname))
-	    (format nil "VTG_~A" (aval :ID form))
-	    (format nil "VTG_~A" cname))
+	(format nil "VTG_~A" (if (zerop (length cname))
+				 (aval :ID form)
+				 cname))
 	cname)))
 
-;; Since C allows definitions overdefining declarations, we shall check if the
-;; name is already defined.
+;; Handle top-level name creation, including forward references.
+;; We know the cname.
 (defun maybe-new-p (cname location &optional objtype)
   "make sure we have a name and object, (values obj oldp)"
-  (multiple-value-bind (name exists)
+  (multiple-value-bind (name exists); get or create name, setting 'exists'
       (ensure-gethash cname *names* (make-instance 'name :cname cname))
     (with-slots (loc obj) name
       (push location loc)
-      (values (if exists
-		  obj
-		  (setf obj
+      (values (if exists 
+		  obj ;existing names return their existing object;
+		  (setf obj ;new names get a new object.
 			(make-instance objtype :prefname name)))
 	      exists))))
-
+;;-------------------------------------------------------------------------------
+;; Top-level name parsing and find or create name and object.
 (defun maybe-new (form istag &optional objtype)
   "make sure we have a name and object, (values name obj oldp)"
   (maybe-new-p (parse-name form istag)
 	       (aval :LOCATION form)
 	       objtype))
-
+;;==============================================================================
+;;==============================================================================
+;;==============================================================================
+;; The generic function allows us to specialize the subform parsers
+(defgeneric parse-key-form (obj key subform))
 ;;-------------------------------------------------------------------------------
-;; Parse top sexp, maybe creating a new one, collecting data if keys requested 
-(defun parse-top-prim (type istag form &rest keys)
-  (let ((obj (maybe-new form istag type)))
-    (loop for key in keys do
-	 (let ((val (aval key form)))
-	   (setf (slot-value obj (find-symbol (symbol-name key)))
-		 (parse-slot obj key val))))
-    obj))
-
-;; used for non-top, always makes instance...?
-(defun parse-prim (type form &rest keys)
-  (let ((obj (make-instance type)))
-    (loop for key in keys do
-	 (let ((val (aval key form)))
-	   (setf (slot-value obj (find-symbol (symbol-name key)))
-		 (parse-slot obj key val))))
-    obj))
-
-(defmethod parse-slot ((obj t) (key t) form)
-    form)
+;; Normally, we just return the subform for the key, but some
+;; keys such as pointers, fields, etc. require more parsing.
+(defmethod parse-key-form ((obj t) (key t) subform)
+  subform)
+;;-------------------------------------------------------------------------------
 ;; generic type parser
-(defmethod parse-slot ((obj t) (key (eql :type)) form)
-  (parse-type form)
-  )
-
-(defgeneric parse+ (type form))
-
-(defun parse-top (form)
-  (parse+ (intern (aval :TAG form)) form )
-	;(gethash tag *names*)
-;  (error "Unable to parse ~A" form)
-  )
-;; A 
+(defmethod parse-key-form ((obj t) (key (eql :type)) form)
+  (parse-type form))
+;;-------------------------------------------------------------------------------
+;;
 (defun parse-type (form)
   (let ((str (aval :TAG form)))
     (or (when-let ((sym (find-symbol str))) ; a builtin type, such as "union"
@@ -82,66 +87,89 @@
 	  (if (obj name)
 	      (obj name))
 	  (obj name))
-
 	(error "Unable to parse type ~A ~A" form (find-symbol str))
 	)))
+;;
+;; The other key-form parsers are specialized by type. See the types below.
+;;
+;;-------------------------------------------------------------------------------;; The actual key parse dispatcher.
+(defun parse-named-keys (obj form keys)
+  (loop for key in keys do
+       (let ((val (aval key form))
+	     (slot (find-symbol (symbol-name key))))
+	 (unless slot
+	   (error "parse-named-keys: no (slot) symbol ~A in form ~A"
+		  slot form))
+	   (setf (slot-value obj slot)
+		 (parse-key-form obj key val))))
+  obj)
+;;==============================================================================
+;;-------------------------------------------------------------------------------
+;; Parse top form, handling name and parse named keys
+;;
+(defun parse-top-prim (type istag form &rest keys)
+  (parse-named-keys (maybe-new form istag type) form keys))
+;;-------------------------------------------------------------------------------
+;; Parse internal form, such as a pointer or a field,
+;; creating a specific type (no name, of course), and parse named keys.
+(defun parse-internal (type form &rest keys)
+  (parse-named-keys (make-instance type) form keys))
+
+;;==============================================================================
+;;
+;; Dispatching parsers on type...
+;; 
+(defgeneric parse+ (type form))
+;;
+;;
+(defun parse-top (form)
+  (parse+ (intern (aval :TAG form)) form ))
+
 
 ;;==============================================================================
 ;;==============================================================================
-(defclass efield ()
-  ((name :accessor name :initarg :name :initform nil)
-   (value :accessor value :initarg :value :initform nil)))
+(defc2ffi efield () (name value))
 
 (defun parse-efield (form)
-  (parse-prim 'efield form :name :value)
-#||  (make-instance 'efield
-		 :name (aval :name form)
-		 :value (aval :value form))
-||#)
+  (parse-internal 'efield form :name :value))
 
 ;;==============================================================================
-(defclass field ()
-  ((name :accessor name :initarg :name :initform nil)
-   (bit-offset :accessor bit-offset :initarg :bit-offset :initform nil)
-   (bit-alignment :accessor bit-alignment :initarg :bit-alignment :initform nil)
-   (bit-size :accessor bit-size :initarg :bit-size :initform nil)
-   (type :accessor :type :initarg :type)))
+(defc2ffi field () (name bit-offset bit-alignment bit-size type))
 
 (defun parse-field (form)
-  (parse-prim 'field form :name :bit-offset :bit-alignment :bit-size :type))
+  (parse-internal 'field form :name :bit-offset :bit-alignment :bit-size :type))
 ;;==============================================================================
-(defclass parameter()
-  ((name :accessor name :initarg :name :initform nil)
-   (type :accessor :type :initarg :type)))
+(defc2ffi parameter () (name type))
 
 (defun parse-parameter (form)
-  (parse-prim 'parameter form :name :type))
+  (parse-internal 'parameter form :name :type))
 
+
+;;==============================================================================
+(defc2ffi pointer () (type))
+
+(defmethod parse+ ((type (eql '|:pointer|)) form)
+  (parse-internal 'pointer form :TYPE))
+
+;;==============================================================================
+(defc2ffi bitfield () (type width))
+
+(defmethod parse+ ((type (eql '|:bitfield|)) form)
+  (parse-internal 'bitfield form :TYPE :WIDTH))
+
+;;==============================================================================
+;;==============================================================================
+;;==============================================================================
 (defclass cl-named ()
   ((prefname :accessor prefname :initarg :prefname )))
 
 ;;==============================================================================
-(defclass pointer ()
-  ((type :accessor :type :initarg :type)))
+(defc2ffi vbase (cl-named) (type))
 
-(defmethod parse+ ((type (eql '|:pointer|)) form)
-  (make-instance 'pointer :type (parse-type (aval :TYPE form))))
-
-;;==============================================================================
-(defclass bitfield ()
-  ((type :accessor :type :initarg :type)
-   (width :accessor width :initarg :width :initform nil)))
-
-(defmethod parse+ ((type (eql '|:bitfield|)) form)
-  (parse-prim 'bitfield form :TYPE :WIDTH))
-
-;;==============================================================================
-(defclass vbase (cl-named)
- ((type :accessor :type :initarg :type :initform nil)))
-
+;; Fake type, we initialize it explicitly...
 (defun new-vbase (cname basetype)
   (let ((obj (maybe-new-p cname nil 'vbase)))
-    (setf (:type obj) basetype))
+    (setf (-type obj) basetype))
   )
 
 (defmethod parse+ ((o vbase) form)
@@ -151,8 +179,7 @@
 ;;
 ;; typedef
 ;;
-(defclass |typedef| (cl-named)
-  ((type :accessor :type :initarg :type)))
+(defc2ffi |typedef| (cl-named) (type))
 
 (defmethod parse+ ((type (eql '|typedef|)) form)
   (parse-top-prim type nil form :TYPE))
@@ -160,8 +187,7 @@
 ;;
 ;; extern
 ;;
-(defclass |extern| (cl-named)
-  ((type :accessor :type :initarg :type)))
+(defc2ffi |extern| (cl-named) (type))
 
 (defmethod parse+ ((type (eql '|extern|)) form)
   (parse-top-prim type nil form :TYPE))
@@ -170,33 +196,32 @@
 ;;
 ;; unhandled
 ;;
-(defclass |unhandled| (cl-named)
-  ((kind :accessor kind :initarg :kind)))
+(defc2ffi |unhandled| (cl-named) (kind))
 
 (defmethod parse+ ((type (eql '|unhandled|)) form)
   (parse-top-prim type nil form :KIND))
 
 
 ;;==============================================================================
-(defclass |enum| (cl-named)
-  ((fields :accessor :fields :initarg :fields)))
+;;
+;; enum
+;;
+(defc2ffi |enum| (cl-named) (fields))
 
 (defmethod parse+ ((type (eql '|enum|)) form)
   (parse-top-prim type t form :FIELDS))
 
 (defmethod parse+ ((type (eql '|:enum|)) form)
-  (obj (gethash (parse-name form t) *names*)))
+  (maybe-new form t '|enum|))
 
-(defmethod parse-slot ((obj |enum|) (key (eql :fields)) form)
+(defmethod parse-key-form ((obj |enum|) (key (eql :fields)) form)
   (mapcar #'parse-efield form)
 )
 ;;==============================================================================
 ;;
 ;; struct
 ;;
-(defclass |struct| (cl-named)
-  ((bit-size :accessor bit-size :initarg :bit-size :initform nil)
-   (fields :accessor :fields :initarg :fields)))
+(defc2ffi |struct| (cl-named) (bit-size fields))
 
 (defmethod parse+ ((type (eql '|struct|)) form)
   (parse-top-prim type t form :BIT-SIZE :FIELDS))
@@ -205,61 +230,46 @@
 (defmethod parse+ ((type (eql '|:struct|)) form)
   (maybe-new form t '|struct|))
 
-(defmethod parse-slot ((obj |struct|) (key (eql :fields)) fields)
+(defmethod parse-key-form ((obj |struct|) (key (eql :fields)) fields)
   (mapcar #'parse-field fields))
 
 ;;==============================================================================
 ;;
 ;; union
 ;;
-(defclass |union| (cl-named)
-  ((bit-size :accessor bit-size :initarg :bit-size :initform nil)
-   (fields :accessor :fields :initarg :fields)))
+(defc2ffi |union| (cl-named) (bit-size fields))
 
 (defmethod parse+ ((type (eql '|union|)) form)
   (parse-top-prim type t form :BIT-SIZE :FIELDS))
 
 ;; get obj, maybe creating an empty struct
 (defmethod parse+ ((type (eql '|:union|)) form)
-  (maybe-new form t '|struct|))
+  (maybe-new form t '|union|))
 
-(defmethod parse-slot ((obj |union|) (key (eql :fields)) form)
+(defmethod parse-key-form ((obj |union|) (key (eql :fields)) form)
   (mapcar #'parse-field form))
 
 ;;==============================================================================
 ;;
 ;; function
 ;;
-(defclass |function| (cl-named)
-  ((variadic :accessor variadic :initarg :variadic :initform nil)
-   (inline   :accessor :inline  :initarg :inline :initform nil)
-   (storage--class :accessor storage--class :initarg :storage--class :initform nil)
-   (parameters :accessor :parameters :initarg :parameters :initform nil)))
+(defc2ffi |function| (cl-named) (variadic inline storage--class parameters))
 
 (defmethod parse+ ((type (eql '|function|)) form)
   (parse-top-prim type nil form :VARIADIC :INLINE :STORAGE--CLASS :PARAMETERS))
-#|
-(defmethod parse+ ((type (eql '|:function|)) form)
-  (multiple-value-bind (obj existed)
-      (maybe-new form nil '|function|)
-    (unless existed
-      (format t "Warning: reference to undeclared function ~A"
-	      (cname  (prefname obj))))))
-||#
-(defmethod parse-slot ((obj |function|) (key (eql :parameters)) form)
-  (mapcar #'parse-parameter form)
-)
+
+(defmethod parse-key-form ((obj |function|) (key (eql :parameters)) form)
+  (mapcar #'parse-parameter form))
+
 ;;==============================================================================
 ;;
 ;; array  (never top)
 ;;
-(defclass |array| ()
-  ((type :accessor :type :initarg :type)
-   (size :accessor :size :initarg :size :initform nil)) )
+(defc2ffi |array| () (type size))
 
 ;;weird
 (defmethod parse+ ((type (eql '|:array|)) form)
-  (parse-prim '|array| form :TYPE :SIZE))
+  (parse-internal '|array| form :TYPE :SIZE))
 ;;==============================================================================
 
 (defun init ()
@@ -293,4 +303,4 @@
 (defun parse-all ()
   (init)
   (mapc #'parse-top *sexps*)
-  nil)
+  (hash-table-count *names*))
