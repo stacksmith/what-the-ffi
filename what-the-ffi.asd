@@ -2,7 +2,7 @@
 
 (asdf:defsystem #:what-the-ffi
   :description "Generate and reason about ffi's"
-  :author ""
+  :author "StackSmith <fpgasm@apple2.x10.mx>"
   :license "BSD 3-clause license"
   :serial t
   :depends-on (#:cffi #:alexandria #:cl-ppcre #:cl-json)
