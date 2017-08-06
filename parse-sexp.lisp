@@ -18,7 +18,8 @@
 				      'string "-" (symbol-name slotname)))
 			    :initform nil)))
 	'(name value type fields width bit-offset bit-alignment 
-	  bit-size kind variadic inline storage--class parameters size)))
+	  bit-size kind variadic inline storage--class parameters size
+	  return-type)))
 ;; A defclass that uses the c2ffi slots
 (defmacro defc2ffi (name direct-superclasses  c2ffi-slots)
   `(defclass ,name ,direct-superclasses
@@ -39,7 +40,14 @@
    (loc :accessor loc :initarg :loc :initform nil)
    (obj :accessor obj :initarg :obj :initform nil)))
 
+(defmethod print-object ((o name) s)
+  ;;(print-unreadable-object (o s :type t))   ; :identity t
+  (format s "#<~A>" (cname o)))
 
+(defmethod show ((o name) &key)
+  ;;(print-unreadable-object (o s :type t))   ; :identity t
+  (format t "~A~%"  (loc o) )
+  (show (obj o)))
 ;;==============================================================================
 ;; parse a name from form, optionally as a tag.  Anonymous struct etc. are
 ;; assigned a VGT_xxx name, where xxx is c2ffi-assigned id number.
@@ -60,7 +68,7 @@
   (multiple-value-bind (name exists); get or create name, setting 'exists'
       (ensure-gethash cname *names* (make-instance 'name :cname cname))
     (with-slots (loc obj) name
-      (push location loc)
+      (setf loc location);; (push location loc)
       (values (if exists 
 		  obj ;existing names return their existing object;
 		  (setf obj ;new names get a new object.
@@ -90,6 +98,9 @@
 ;; generic type parser, 
 (defmethod parse-key-form ((obj t) (key (eql :type)) form)
   (parse-type form))
+(defmethod parse-key-form ((obj t) (key (eql :return-type)) form)
+  (parse-type form))
+
 ;;-------------------------------------------------------------------------------
 ;; and function typ parse type from a form
 (defun parse-type (form)

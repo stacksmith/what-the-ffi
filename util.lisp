@@ -194,3 +194,9 @@ object is specified by OBJECT-INITARG being non-NIL."
     (string (list in))
     (t (error "~A cannot be listified"in )))
   )
+
+(defun obj-from (item)
+  (typecase item
+    (string (obj (gethash item *names*)))
+    (cl-named item)
+    (name (obj item))))

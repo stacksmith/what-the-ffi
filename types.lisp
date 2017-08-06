@@ -30,6 +30,11 @@
 ;;==============================================================================
 (defc2ffi pointer () (type))
 
+(defmethod print-object ((o pointer) s)
+  (print-unreadable-object (o s :type t) ; :identity t
+    (print-object (-type o) s)
+    ))
+
 (defmethod parse+ ((type (eql '|:pointer|)) form)
   (parse-internal 'pointer form :TYPE))
 
@@ -46,7 +51,12 @@
 ;;
 (defclass cl-named ()
   ((prefname :accessor prefname :initarg :prefname )))
+(pull-register item by)
 
+(defmethod print-object ((o cl-named) s)
+  (print-unreadable-object (o s :type t) ; :identity t
+    (format s "~A" (cname (prefname o)))
+    ))
 ;;==============================================================================
 ;; vbase   a fake class for the bottommost types
 ;;
@@ -138,13 +148,20 @@
 ;;
 ;; function
 ;;
-(defc2ffi |function| (cl-named) (variadic inline storage--class parameters))
+(defc2ffi |function| (cl-named) (variadic inline storage--class parameters return-type))
 
 (defmethod parse+ ((type (eql '|function|)) form)
-  (parse-top-prim type nil form :VARIADIC :INLINE :STORAGE--CLASS :PARAMETERS))
+  (parse-top-prim type nil form :VARIADIC :INLINE :STORAGE--CLASS :PARAMETERS
+		  :RETURN-TYPE))
 
 (defmethod parse-key-form ((obj |function|) (key (eql :parameters)) form)
   (mapcar #'parse-parameter form))
+#||
+(defmethod print-object ((o |function|) s)
+  (print-unreadable-object (o s :type t)   ; :identity t
+    (format s ":~A" (-return-type o))
+    ))
+||#
 
 ;;==============================================================================
 ;;
