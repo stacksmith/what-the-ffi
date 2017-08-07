@@ -10,25 +10,30 @@
 ;;==============================================================================
 ;;==============================================================================
 ;;==============================================================================
+(defclass base () ())
+
 (defc2ffi efield () (name value))
 
 (defun parse-efield (form)
   (parse-internal 'efield form :name :value))
 
 ;;==============================================================================
-(defc2ffi field () (name bit-offset bit-alignment bit-size type))
+(defc2ffi field (base) (name bit-offset bit-alignment bit-size type))
 
 (defun parse-field (form)
   (parse-internal 'field form :name :bit-offset :bit-alignment :bit-size :type))
 ;;==============================================================================
-(defc2ffi parameter () (name type))
+(defc2ffi parameter (base) (name type))
 
 (defun parse-parameter (form)
   (parse-internal 'parameter form :name :type))
 
 
 ;;==============================================================================
-(defc2ffi pointer () (type))
+;;
+;; pointer
+;;
+(defc2ffi pointer (base) (type))
 
 (defmethod print-object ((o pointer) s)
   (print-unreadable-object (o s :type t) ; :identity t
@@ -39,7 +44,7 @@
   (parse-internal 'pointer form :TYPE))
 
 ;;==============================================================================
-(defc2ffi bitfield () (type width))
+(defc2ffi bitfield (base) (type width))
 
 (defmethod parse+ ((type (eql '|:bitfield|)) form)
   (parse-internal 'bitfield form :TYPE :WIDTH))
@@ -49,9 +54,15 @@
 ;;==============================================================================
 ;; named classes
 ;;
-(defclass cl-named ()
-  ((prefname :accessor prefname :initarg :prefname )))
-(pull-register item by)
+(defclass cl-named (base)
+  ((prefname :accessor prefname :initarg :prefname )
+   (refs :accessor refs :initform nil) ;list of named (non-pointer) users
+   ))
+
+(defmethod prefname ((obj base))
+  nil)
+
+
 
 (defmethod print-object ((o cl-named) s)
   (print-unreadable-object (o s :type t) ; :identity t
